@@ -16,7 +16,7 @@ from chan_core import ChanEngine, Direction, FenXingType
 #    - 叠加笔 (Bi)
 # =================================================================================================
 
-def plot_chan(df: pd.DataFrame, engine: ChanEngine, period: str = '15'):
+def plot_chan(df: pd.DataFrame, engine: ChanEngine, period: str = '15', stock_code: str = '000300', stock_name: str = None, return_figure: bool = False):
     """
     绘制K线和缠论笔。
     Plots the K-lines and Chan Bi.
@@ -25,16 +25,40 @@ def plot_chan(df: pd.DataFrame, engine: ChanEngine, period: str = '15'):
         df: 原始K线数据DataFrame
         engine: 计算完毕的ChanEngine对象，包含笔的数据
         period: K线周期 (如 '1', '5', '15', '30')
+        stock_code: 股票代码 (如 '000001')
+        stock_name: 股票名称 (如 '贵州茅台')
+        return_figure: 是否返回 Figure 对象而不保存文件
     """
     # Ensure index is DatetimeIndex
     if 'datetime' in df.columns:
         df['datetime'] = pd.to_datetime(df['datetime'])
         df.set_index('datetime', inplace=True)
+        
+    # Ensure columns are Title Case for mplfinance
+    # mplfinance expects: Open, High, Low, Close, Volume
+    df = df.rename(columns={
+        'open': 'Open',
+        'high': 'High',
+        'low': 'Low',
+        'close': 'Close',
+        'volume': 'Volume'
+    })
     
     # -------------------------------------------------------------------------
     # 1. 绘图设置 (Setup)
     # -------------------------------------------------------------------------
-    s = mpf.make_mpf_style(base_mpf_style='charles', rc={'font.family': 'SimHei'})
+    
+    # 显式配置字体，确保中文显示正常
+    # 优先尝试 Windows 常见中文字体
+    plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS'] 
+    plt.rcParams['axes.unicode_minus'] = False # 解决负号显示为方块的问题
+    
+    # 对于 mplfinance，我们也尝试传入字体配置，但上面全局配置通常更有效
+    # 注意：mplfinance 的 rc 参数会覆盖一部分 rcParams，所以这里也要指定
+    s = mpf.make_mpf_style(base_mpf_style='charles', rc={
+        'font.family': ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS'],
+        'axes.unicode_minus': False
+    })
     
     # 使用 mplfinance 获取 figure 和 axes，以便完全控制
     # 我们先在 ax1 画原始K线，这样 mplfinance 会自动处理日期索引的映射（0, 1, 2...）
@@ -50,10 +74,25 @@ def plot_chan(df: pd.DataFrame, engine: ChanEngine, period: str = '15'):
     
     # 画 Panel 1: 原始K线
     # ax=ax1 让 mpf 在指定轴上画图
+    # Use warn_too_much_data to silence warnings if needed, but for 1 min data we might have thousands of points
+    # Increase limit if needed. Default is 50.
+    
+    if period == 'daily':
+        title_suffix = 'Raw K-Lines (Daily)'
+    else:
+        title_suffix = f'Raw K-Lines ({period} Min)'
+        
+    # Build title components
+    # Logic simplified: Always use stock_code and optional stock_name
+    if stock_name:
+        title_text = f"{stock_name} {stock_code} - {title_suffix}"
+    else:
+        title_text = f"{stock_code} - {title_suffix}"
+        
     mpf.plot(df, type='candle', style=s, ax=ax1,
              ylabel='Raw Price',
-             warn_too_much_data=len(df),
-             axtitle=f'Raw K-Lines ({period} Min)')
+             warn_too_much_data=10000, 
+             axtitle=title_text)
 
     # -------------------------------------------------------------------------
     # 2. 画 Panel 2: 缠论标准K线 (Custom Drawing on ax2)
@@ -67,7 +106,7 @@ def plot_chan(df: pd.DataFrame, engine: ChanEngine, period: str = '15'):
     mpf.plot(df, type='line', style=s, ax=ax2, 
              linecolor='none', # 不可见
              ylabel='Chan Price',
-             warn_too_much_data=len(df),
+             warn_too_much_data=10000,
              axtitle='Chan Standard K-Lines (Variable Width) + Bi')
 
     # 现在手动在 ax2 上添加矩形 (Standard K-Lines)
@@ -143,11 +182,14 @@ def plot_chan(df: pd.DataFrame, engine: ChanEngine, period: str = '15'):
         edge_color = edge_up if is_up else edge_down
         
         # 绘制矩形
+        # Use relative width based on data density? No, width is logical.
+        # But if width is too small on screen (e.g. 1000 bars), it might disappear or look like a line.
+        # Ensure minimum width visibility if needed, but rect width corresponds to x-axis units.
         rect = patches.Rectangle(
             (x_center - width/2, bottom), # (left, bottom)
             width, 
             height,
-            linewidth=1,
+            linewidth=1, # Fixed linewidth might be too thick for dense data
             edgecolor=edge_color,
             facecolor=face_color
         )
@@ -187,8 +229,16 @@ def plot_chan(df: pd.DataFrame, engine: ChanEngine, period: str = '15'):
             
         ax2.plot([x1, x2], [y1, y2], color=color, linewidth=2)
 
+    if return_figure:
+        return fig
+    
     # 保存图片
-    filename = f'chan_chart_{period}m.png'
+    # Only save if NOT returning figure (though this branch is likely unused in GUI mode)
+    if period == 'daily':
+        filename = 'chan_chart_daily.png'
+    else:
+        filename = f'chan_chart_{period}m.png'
+        
     fig.savefig(filename, bbox_inches='tight')
     print(f"Chart saved to {filename}")
 
